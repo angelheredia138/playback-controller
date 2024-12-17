@@ -1,5 +1,33 @@
+import { defineNuxtConfig } from "nuxt/config";
+import * as fs from "graceful-fs";
+fs.gracefulify(require("fs"));
+
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
-  compatibilityDate: '2024-11-01',
-  devtools: { enabled: true }
-})
+  typescript: {
+    strict: true,
+  },
+  vite: {
+    define: {
+      __TAURI__: typeof process !== "undefined" && !!process.env.TAURI,
+    },
+    optimizeDeps: {
+      exclude: ["@tauri-apps/api"], // Ensure Vite doesn't pre-bundle Tauri API
+    },
+    resolve: {
+      alias: {
+        "@tauri-apps/api": "@tauri-apps/api", // Ensure it resolves cleanly
+      },
+    },
+  },
+  css: ["~/assets/css/main.css"],
+  plugins: ["~/plugins/tauri-mock.client.ts"],
+  compatibilityDate: "2024-11-01",
+  devtools: { enabled: true },
+  postcss: {
+    plugins: {
+      tailwindcss: {},
+      autoprefixer: {},
+    },
+  },
+});
