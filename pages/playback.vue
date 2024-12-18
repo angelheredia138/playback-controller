@@ -26,7 +26,7 @@
 
       <button
         class="bg-gray-700 hover:bg-gray-600 p-2 rounded"
-        @click="playPause"
+        @click="togglePlayPause"
       >
         <template v-if="isPlaying">
           <PauseIcon class="w-6 h-6" />
@@ -46,7 +46,12 @@
 
       <!-- Shuffle -->
       <button
-        class="bg-gray-700 hover:bg-gray-600 p-2 rounded"
+        :class="{
+          'bg-green-500': isShuffleEnabled,
+          'bg-gray-700': !isShuffleEnabled,
+          'hover:bg-gray-600': true,
+        }"
+        class="p-2 rounded"
         @click="toggleShuffle"
       >
         <ArrowsRightLeftIcon class="w-6 h-6" />
@@ -60,21 +65,43 @@
         <ArrowPathIcon class="w-6 h-6" />
       </button>
 
-      <!-- Change Playlist -->
-      <button
-        class="bg-gray-700 hover:bg-gray-600 p-2 rounded"
-        @click="changePlaylist"
-      >
-        <ListBulletIcon class="w-6 h-6" />
-      </button>
+      <!-- Playlist Dropdown -->
+      <div>
+        <select
+          v-model="selectedPlaylist"
+          class="bg-gray-700 text-white p-2 rounded"
+          @change="changePlaylist"
+        >
+          <option value="" disabled>Select a playlist</option>
+          <option
+            v-for="playlist in playlists"
+            :key="playlist.id"
+            :value="playlist.id"
+          >
+            {{
+              playlist.name.length > 30
+                ? playlist.name.slice(0, 30) + "..."
+                : playlist.name
+            }}
+          </option>
+        </select>
+      </div>
 
-      <!-- Volume Control -->
-      <button
-        class="bg-gray-700 hover:bg-gray-600 p-2 rounded"
-        @click="adjustVolume"
-      >
+      <!-- Volume Slider -->
+      <div class="flex items-center space-x-2">
         <SpeakerWaveIcon class="w-6 h-6" />
-      </button>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          v-model.number="currentVolume"
+          @input="updateVolume"
+          class="w-32 h-2 bg-gray-700 rounded-lg"
+        />
+
+        <span class="text-sm text-gray-300">{{ currentVolume }}%</span>
+      </div>
     </div>
   </div>
 </template>
@@ -83,6 +110,11 @@
 import { ref, onMounted, onBeforeUnmount } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 
+const isPlaying = ref(false);
+const isShuffleEnabled = ref(false);
+const playlists = ref([]);
+const selectedPlaylist = ref(null);
+const currentVolume = ref(50); // default volume at 50 if we don’t have state yet
 // Import icons from Heroicons (solid set)
 import {
   PlayIcon,
@@ -92,6 +124,7 @@ import {
   ArrowPathIcon,
   ListBulletIcon,
   SpeakerWaveIcon,
+  PauseIcon,
 } from "@heroicons/vue/24/solid";
 
 const song = ref({
@@ -161,7 +194,6 @@ async function getCurrentSong() {
     const errorMessage = typeof err === "string" ? err : JSON.stringify(err);
 
     if (errorMessage.includes("expired")) {
-      console.log("🔄 Refreshing access token...");
       const newToken = await refreshAccessToken();
       if (newToken) {
         await getCurrentSong();
@@ -172,48 +204,125 @@ async function getCurrentSong() {
   }
 }
 
-// Playback control actions (currently placeholders)
-async function playPause() {
+async function togglePlayPause() {
   try {
-    await invoke("play_pause");
-    isPlaying.value = !isPlaying.value; // Toggle the playback state
+    if (isPlaying.value) {
+      await invoke("pause");
+      isPlaying.value = false;
+    } else {
+      await invoke("play");
+      isPlaying.value = true;
+    }
   } catch (err) {
     console.error("Error toggling play/pause:", err);
   }
 }
 
 async function nextTrack() {
-  console.log("Next track clicked. Not implemented yet.");
+  try {
+    await invoke("skip_next");
+  } catch (err) {
+    console.error("Error skipping to the next track:", err);
+  }
 }
 
 async function previousTrack() {
-  console.log("Previous track clicked. Not implemented yet.");
+  try {
+    await invoke("skip_previous");
+  } catch (err) {
+    console.error("Error skipping to the previous track:", err);
+  }
 }
 
 async function toggleShuffle() {
-  console.log("Shuffle clicked. Not implemented yet.");
+  try {
+    const newShuffleState = await invoke("toggle_shuffle");
+    isShuffleEnabled.value = newShuffleState;
+  } catch (err) {
+    console.error("Error toggling shuffle:", err);
+  }
 }
 
 async function restartSong() {
-  console.log("Restart song clicked. Not implemented yet.");
+  try {
+    await invoke("restart_song");
+  } catch (err) {
+    console.error("Error restarting the song:", err);
+  }
+}
+async function fetchPlaylists() {
+  try {
+    const userPlaylists = await invoke("fetch_playlists");
+    playlists.value = userPlaylists.items.map((playlist) => ({
+      id: playlist.id,
+      name: playlist.name,
+    }));
+  } catch (err) {
+    console.error("Error fetching playlists:", err);
+  }
+}
+async function fetchCurrentPlayback() {
+  try {
+    const playbackData = await invoke("get_current_playback");
+
+    const contextUri = playbackData?.context?.uri || null;
+
+    // Extract playlist ID if the context URI is a playlist
+    if (contextUri && contextUri.startsWith("spotify:playlist:")) {
+      selectedPlaylist.value = contextUri.split(":")[2];
+    }
+  } catch (err) {
+    console.error("Error fetching current playback:", err);
+  }
 }
 
 async function changePlaylist() {
-  console.log("Change playlist clicked. Not implemented yet.");
+  try {
+    if (selectedPlaylist.value) {
+      // Use 'playlistId' to match the backend parameter exactly
+      await invoke("change_playlist", { playlistId: selectedPlaylist.value });
+    } else {
+      console.warn("No playlist selected.");
+    }
+  } catch (err) {
+    console.error("Error changing playlist:", err);
+  }
 }
 
-async function adjustVolume() {
-  console.log("Volume control clicked. Not implemented yet.");
+async function adjustVolume() {}
+async function updateVolume() {
+  try {
+    await invoke("set_volume", { volume: currentVolume.value });
+  } catch (err) {
+    console.error("Error setting volume:", err);
+  }
 }
 
 onMounted(async () => {
   await initializeAccessToken();
+  await fetchPlaylists();
+  await fetchCurrentPlayback();
   await getCurrentSong();
+
+  // Fetch the playback state to get current volume
+  try {
+    const playbackState = await invoke("get_playback_state");
+    // If a device exists in playbackState, use its volume percent
+    const volume = playbackState?.device?.volume_percent;
+    if (typeof volume === "number") {
+      currentVolume.value = volume;
+    }
+
+    isPlaying.value = playbackState.is_playing || false;
+    isShuffleEnabled.value = playbackState.shuffle_state || false;
+  } catch (err) {
+    console.error("Error fetching playback state:", err);
+  }
 
   // Update every 1.5 seconds
   refreshIntervalId = setInterval(() => {
     getCurrentSong();
-  }, 1_500);
+  }, 1500);
 });
 
 onBeforeUnmount(() => {
