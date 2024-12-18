@@ -1,6 +1,8 @@
 <template>
-  <div class="flex items-center justify-center h-screen bg-gray-900 text-white">
-    <div class="bg-gray-800 rounded-lg shadow-lg p-6 max-w-sm w-full">
+  <div
+    class="flex flex-col items-center justify-center h-screen bg-gray-900 text-white"
+  >
+    <div class="bg-gray-800 rounded-lg shadow-lg p-6 max-w-sm w-full mb-4">
       <img
         :src="song.image"
         alt="Song Artwork"
@@ -11,12 +13,86 @@
         {{ song.artist }}
       </p>
     </div>
+
+    <!-- Playback Controls -->
+    <div class="flex space-x-4">
+      <!-- Previous -->
+      <button
+        class="bg-gray-700 hover:bg-gray-600 p-2 rounded"
+        @click="previousTrack"
+      >
+        <BackwardIcon class="w-6 h-6" />
+      </button>
+
+      <button
+        class="bg-gray-700 hover:bg-gray-600 p-2 rounded"
+        @click="playPause"
+      >
+        <template v-if="isPlaying">
+          <PauseIcon class="w-6 h-6" />
+        </template>
+        <template v-else>
+          <PlayIcon class="w-6 h-6" />
+        </template>
+      </button>
+
+      <!-- Next -->
+      <button
+        class="bg-gray-700 hover:bg-gray-600 p-2 rounded"
+        @click="nextTrack"
+      >
+        <ForwardIcon class="w-6 h-6" />
+      </button>
+
+      <!-- Shuffle -->
+      <button
+        class="bg-gray-700 hover:bg-gray-600 p-2 rounded"
+        @click="toggleShuffle"
+      >
+        <ArrowsRightLeftIcon class="w-6 h-6" />
+      </button>
+
+      <!-- Restart Song -->
+      <button
+        class="bg-gray-700 hover:bg-gray-600 p-2 rounded"
+        @click="restartSong"
+      >
+        <ArrowPathIcon class="w-6 h-6" />
+      </button>
+
+      <!-- Change Playlist -->
+      <button
+        class="bg-gray-700 hover:bg-gray-600 p-2 rounded"
+        @click="changePlaylist"
+      >
+        <ListBulletIcon class="w-6 h-6" />
+      </button>
+
+      <!-- Volume Control -->
+      <button
+        class="bg-gray-700 hover:bg-gray-600 p-2 rounded"
+        @click="adjustVolume"
+      >
+        <SpeakerWaveIcon class="w-6 h-6" />
+      </button>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+
+// Import icons from Heroicons (solid set)
+import {
+  PlayIcon,
+  ForwardIcon,
+  BackwardIcon,
+  ArrowsRightLeftIcon,
+  ArrowPathIcon,
+  ListBulletIcon,
+  SpeakerWaveIcon,
+} from "@heroicons/vue/24/solid";
 
 const song = ref({
   title: "Unknown Title",
@@ -73,12 +149,7 @@ async function initializeAccessToken() {
 
 async function getCurrentSong() {
   try {
-    console.log(
-      "🚀 Access Token about to be sent:",
-      localStorage.getItem("spotify_access_token")
-    );
     const currentSong = await invoke("fetch_current_song");
-    console.log("🎶 Fetched Song Data:", currentSong);
 
     if (currentSong) {
       song.value = currentSong;
@@ -101,14 +172,48 @@ async function getCurrentSong() {
   }
 }
 
+// Playback control actions (currently placeholders)
+async function playPause() {
+  try {
+    await invoke("play_pause");
+    isPlaying.value = !isPlaying.value; // Toggle the playback state
+  } catch (err) {
+    console.error("Error toggling play/pause:", err);
+  }
+}
+
+async function nextTrack() {
+  console.log("Next track clicked. Not implemented yet.");
+}
+
+async function previousTrack() {
+  console.log("Previous track clicked. Not implemented yet.");
+}
+
+async function toggleShuffle() {
+  console.log("Shuffle clicked. Not implemented yet.");
+}
+
+async function restartSong() {
+  console.log("Restart song clicked. Not implemented yet.");
+}
+
+async function changePlaylist() {
+  console.log("Change playlist clicked. Not implemented yet.");
+}
+
+async function adjustVolume() {
+  console.log("Volume control clicked. Not implemented yet.");
+}
+
 onMounted(async () => {
   await initializeAccessToken();
   await getCurrentSong();
 
-  // Call getCurrentSong every 10 seconds to keep updated
+  // Update every 1.5 seconds
   refreshIntervalId = setInterval(() => {
     getCurrentSong();
-  }, 1_500); // 1,500ms = 1.5s
+  }, 1_500);
 });
 
 onBeforeUnmount(() => {

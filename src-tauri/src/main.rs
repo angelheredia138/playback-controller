@@ -156,11 +156,129 @@ fn get_spotify_auth_url() -> String {
     dotenv().ok();
     let client_id = env::var("SPOTIFY_CLIENT_ID").expect("SPOTIFY_CLIENT_ID not set");
     let redirect_uri = env::var("REDIRECT_URI").unwrap_or("http://localhost:3000/callback".to_string());
-    let scopes = "user-read-playback-state user-read-currently-playing";
+    // Add more scopes later if needed for full playback control
+    let scopes = "user-read-playback-state user-read-currently-playing user-modify-playback-state";
     format!(
         "https://accounts.spotify.com/authorize?client_id={}&response_type=code&redirect_uri={}&scope={}",
         client_id, redirect_uri, scopes
     )
+}
+
+// Playback control commands (currently just placeholders returning Ok(()))
+#[command]
+async fn play_pause(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let access_token = {
+        let guard = state.access_token.lock().map_err(|e| e.to_string())?;
+        guard.clone().ok_or("No access token stored on backend.")?
+    };
+
+    let client = Client::new();
+
+    // Step 1: Get current playback state
+    let player_state_resp = client
+        .get("https://api.spotify.com/v1/me/player")
+        .bearer_auth(&access_token)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get player state: {:?}", e))?;
+
+    if !player_state_resp.status().is_success() {
+        let error_text = player_state_resp.text().await.unwrap_or("Unknown error".to_string());
+        return Err(format!("Spotify API returned an error on get player state: {}", error_text));
+    }
+
+    let player_data: serde_json::Value = player_state_resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse player state JSON: {:?}", e))?;
+
+    let is_playing = player_data
+        .get("is_playing")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // Step 2: Toggle play/pause based on current state
+    let endpoint = if is_playing {
+        "https://api.spotify.com/v1/me/player/pause"
+    } else {
+        "https://api.spotify.com/v1/me/player/play"
+    };
+
+    let toggle_resp = client
+        .put(endpoint)
+        .bearer_auth(&access_token)
+        .json(&{}) // Send empty JSON to avoid 411 error
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send toggle command: {:?}", e))?;
+
+    if toggle_resp.status().is_success() {
+        Ok(())
+    } else {
+        let error_text = toggle_resp.text().await.unwrap_or("Unknown error".to_string());
+        Err(format!("Spotify API returned an error on toggle: {}", error_text))
+    }
+}
+
+
+#[command]
+async fn skip_next(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _access_token = {
+        let guard = state.access_token.lock().map_err(|e| e.to_string())?;
+        guard.clone().ok_or("No access token stored on backend.")?
+    };
+    println!("Would have gone to next track.");
+    Ok(())
+}
+
+#[command]
+async fn skip_previous(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _access_token = {
+        let guard = state.access_token.lock().map_err(|e| e.to_string())?;
+        guard.clone().ok_or("No access token stored on backend.")?
+    };
+    println!("Would have gone to previous track.");
+    Ok(())
+}
+
+#[command]
+async fn toggle_shuffle(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _access_token = {
+        let guard = state.access_token.lock().map_err(|e| e.to_string())?;
+        guard.clone().ok_or("No access token stored on backend.")?
+    };
+    println!("Would have toggled shuffle.");
+    Ok(())
+}
+
+#[command]
+async fn restart_song(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _access_token = {
+        let guard = state.access_token.lock().map_err(|e| e.to_string())?;
+        guard.clone().ok_or("No access token stored on backend.")?
+    };
+    println!("Would have restarted the song.");
+    Ok(())
+}
+
+#[command]
+async fn change_playlist(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _access_token = {
+        let guard = state.access_token.lock().map_err(|e| e.to_string())?;
+        guard.clone().ok_or("No access token stored on backend.")?
+    };
+    println!("Would have changed the playlist.");
+    Ok(())
+}
+
+#[command]
+async fn set_volume(state: tauri::State<'_, AppState>, volume: u8) -> Result<(), String> {
+    let _access_token = {
+        let guard = state.access_token.lock().map_err(|e| e.to_string())?;
+        guard.clone().ok_or("No access token stored on backend.")?
+    };
+    println!("Would have set volume to {}.", volume);
+    Ok(())
 }
 
 fn main() {
@@ -174,6 +292,13 @@ fn main() {
             refresh_spotify_token,
             fetch_current_song,
             store_access_token,
+            play_pause,
+            skip_next,
+            skip_previous,
+            toggle_shuffle,
+            restart_song,
+            change_playlist,
+            set_volume
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");
