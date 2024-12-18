@@ -1,41 +1,48 @@
 <template>
   <div class="flex items-center justify-center h-screen bg-gray-900 text-white">
     <div>
-      <h1 class="text-2xl mb-4">Loading...</h1>
+      <h1 class="text-2xl mb-4">Logging in...</h1>
+      <p v-if="errorMessage" class="text-red-500">{{ errorMessage }}</p>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { useRouter, useRoute } from "vue-router";
+import { invoke } from "@tauri-apps/api/core"; // Correct Tauri import
 
-// Reactive State
-const song = ref({
-  title: "Song Title",
-  artist: "Artist Name",
-  image: "https://via.placeholder.com/300", // Placeholder image
-});
+const router = useRouter();
+const route = useRoute();
+const errorMessage = ref("");
 
-const isPlaying = ref(false);
-const volume = ref(50);
-
-const getCurrentSong = async () => {
+const handleCallback = async () => {
   try {
-    const accessToken = localStorage.getItem("spotify_access_token"); // Get access token from localStorage
-    if (!accessToken) {
-      throw new Error("Access token not found in localStorage.");
+    const code = route.query.code; // Get 'code' from URL
+    if (!code) {
+      throw new Error("Authorization code is missing.");
     }
 
-    const currentSong = await invoke("get_current_song", { accessToken }); // Pass access token to the backend
-    song.value = currentSong; // Update song data with the response
+    console.log("Authorization Code:", code);
+
+    // Exchange the code for an access token
+    const response = await invoke("exchange_spotify_token", { code });
+
+    console.log("Token Response:", response);
+
+    // Save tokens in localStorage
+    localStorage.setItem("spotify_access_token", response.access_token);
+    localStorage.setItem("spotify_refresh_token", response.refresh_token);
+
+    // Redirect to the playback page
+    router.push("/playback");
   } catch (error) {
-    console.error("Error fetching song:", error);
+    console.error("Error handling Spotify callback:", error);
+    errorMessage.value = error.message || "An unexpected error occurred.";
   }
 };
 
-// Fetch song data when the component is mounted
 onMounted(() => {
-  getCurrentSong(); // Fetch current song from backend
+  handleCallback();
 });
 </script>

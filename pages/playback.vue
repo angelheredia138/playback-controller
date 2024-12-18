@@ -1,98 +1,119 @@
 <template>
   <div class="flex items-center justify-center h-screen bg-gray-900 text-white">
     <div class="bg-gray-800 rounded-lg shadow-lg p-6 max-w-sm w-full">
-      <!-- Song Image -->
       <img
         :src="song.image"
         alt="Song Artwork"
         class="w-48 h-48 mx-auto rounded-md mb-4"
       />
-
-      <!-- Song Title and Artist -->
-      <h2 class="text-xl font-bold text-center">{{ song.title }}</h2>
-      <p class="text-md text-gray-400 text-center mb-4">{{ song.artist }}</p>
-
-      <!-- Playback Controls -->
-      <div class="flex justify-center items-center space-x-6 mb-4">
-        <button
-          @click="previousTrack"
-          class="text-teal-400 hover:text-teal-300 text-2xl transition"
-        >
-          ⏮️
-        </button>
-        <button
-          @click="togglePlayPause"
-          class="bg-teal-500 hover:bg-teal-400 text-white px-4 py-2 rounded-full text-xl transition"
-        >
-          {{ isPlaying ? "⏸️" : "▶️" }}
-        </button>
-        <button
-          @click="nextTrack"
-          class="text-teal-400 hover:text-teal-300 text-2xl transition"
-        >
-          ⏭️
-        </button>
-      </div>
-
-      <!-- Volume Control -->
-      <div>
-        <p class="text-sm mb-2 text-center">Volume: {{ volume }}%</p>
-        <input
-          type="range"
-          v-model="volume"
-          min="0"
-          max="100"
-          @input="changeVolume"
-          class="w-full cursor-pointer"
-        />
-      </div>
+      <h2 class="text-xl font-bold text-center truncate">{{ song.title }}</h2>
+      <p class="text-md text-gray-400 text-center mb-4 truncate">
+        {{ song.artist }}
+      </p>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from "vue";
-import { invoke } from "@tauri-apps/api/core"; // Correct import for invoke from Tauri
+import { ref, onMounted, onBeforeUnmount } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 
-// Reactive State
 const song = ref({
-  title: "Song Title",
-  artist: "Artist Name",
-  image: "https://via.placeholder.com/300", // Placeholder image
+  title: "Unknown Title",
+  artist: "Unknown Artist",
+  image: "https://via.placeholder.com/300",
 });
 
-const isPlaying = ref(false);
-const volume = ref(50);
+let refreshIntervalId = null;
 
-// Fetch the current song from the backend
-const getCurrentSong = async () => {
-  try {
-    const currentSong = await invoke("get_current_song"); // Call the Tauri backend function
-    song.value = currentSong; // Update song data with the response
-  } catch (error) {
-    console.error("Error fetching song:", error);
+async function refreshAccessToken() {
+  const refreshToken = localStorage.getItem("spotify_refresh_token");
+  if (!refreshToken) {
+    console.error("No refresh token available. Redirecting to login...");
+    window.location.href = "/";
+    return null;
   }
-};
 
-// Playback Controls
-const togglePlayPause = () => {
-  isPlaying.value = !isPlaying.value;
-};
+  try {
+    const refreshedTokenResponse = await invoke("refresh_spotify_token", {
+      refresh_token: refreshToken,
+    });
+    if (refreshedTokenResponse.refresh_token) {
+      localStorage.setItem(
+        "spotify_refresh_token",
+        refreshedTokenResponse.refresh_token
+      );
+    }
 
-const previousTrack = () => {
-  console.log("Previous track");
-};
+    await invoke("store_access_token", {
+      token: refreshedTokenResponse.access_token,
+    });
+    localStorage.setItem(
+      "spotify_access_token",
+      refreshedTokenResponse.access_token
+    );
+    return refreshedTokenResponse.access_token;
+  } catch (error) {
+    console.error("Error refreshing token:", error);
+    localStorage.clear();
+    window.location.href = "/";
+    return null;
+  }
+}
 
-const nextTrack = () => {
-  console.log("Next track");
-};
+async function initializeAccessToken() {
+  const access_token = localStorage.getItem("spotify_access_token");
+  if (!access_token) {
+    console.error("No access token found. Redirecting to login...");
+    window.location.href = "/";
+    return;
+  }
+  await invoke("store_access_token", { token: access_token });
+}
 
-const changeVolume = () => {
-  console.log("Volume changed:", volume.value);
-};
+async function getCurrentSong() {
+  try {
+    console.log(
+      "🚀 Access Token about to be sent:",
+      localStorage.getItem("spotify_access_token")
+    );
+    const currentSong = await invoke("fetch_current_song");
+    console.log("🎶 Fetched Song Data:", currentSong);
 
-// Fetch song data when the component is mounted
-onMounted(() => {
-  getCurrentSong(); // Fetch current song from backend
+    if (currentSong) {
+      song.value = currentSong;
+    } else {
+      console.warn("⚠️ No song data returned.");
+    }
+  } catch (err) {
+    console.error("❌ Error fetching the current song:", err);
+    const errorMessage = typeof err === "string" ? err : JSON.stringify(err);
+
+    if (errorMessage.includes("expired")) {
+      console.log("🔄 Refreshing access token...");
+      const newToken = await refreshAccessToken();
+      if (newToken) {
+        await getCurrentSong();
+      }
+    } else {
+      console.warn("Unhandled error:", errorMessage);
+    }
+  }
+}
+
+onMounted(async () => {
+  await initializeAccessToken();
+  await getCurrentSong();
+
+  // Call getCurrentSong every 10 seconds to keep updated
+  refreshIntervalId = setInterval(() => {
+    getCurrentSong();
+  }, 1_500); // 1,500ms = 1.5s
+});
+
+onBeforeUnmount(() => {
+  if (refreshIntervalId) {
+    clearInterval(refreshIntervalId);
+  }
 });
 </script>

@@ -15,20 +15,18 @@
 
 <script setup>
 import { ref } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 
 const errorMessage = ref("");
 
 const redirectToSpotify = async () => {
   try {
-    if (typeof window !== "undefined" && window.__TAURI__) {
-      // Use the correct import path for invoke
-      const { invoke } = await import("@tauri-apps/api/core");
+    // Directly invoke the Tauri command without checking __TAURI__
+    const authUrl = await invoke("get_spotify_auth_url");
+    console.log("Spotify Auth URL:", authUrl);
 
-      const authUrl = await invoke("get_spotify_auth_url");
-      window.location.href = authUrl;
-    } else {
-      throw new Error("Tauri runtime is not available.");
-    }
+    // Redirect the user to the Spotify authorization page
+    window.location.href = authUrl;
   } catch (error) {
     console.error("Error redirecting to Spotify:", error);
     errorMessage.value = error.message;

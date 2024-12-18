@@ -21,7 +21,6 @@ export default defineNuxtConfig({
     },
   },
   css: ["~/assets/css/main.css"],
-  plugins: ["~/plugins/tauri-mock.client.ts"],
   compatibilityDate: "2024-11-01",
   devtools: { enabled: true },
   postcss: {
