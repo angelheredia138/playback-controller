@@ -23,6 +23,7 @@ struct Song {
     title: String,
     artist: String,
     image: String,
+    artist_image: String,
     progress_ms: u32,
     duration_ms: u32,
 }
@@ -64,18 +65,40 @@ async fn fetch_current_song(state: tauri::State<'_, AppState>) -> Result<Song, S
 
             let title = json["item"]["name"].as_str().unwrap_or("Unknown Title").to_string();
             let artist = json["item"]["artists"][0]["name"].as_str().unwrap_or("Unknown Artist").to_string();
-            let image = json["item"]["album"]["images"][0]["url"].as_str().unwrap_or("https://via.placeholder.com/300").to_string();
+            let album_image = json["item"]["album"]["images"][0]["url"].as_str().unwrap_or("https://via.placeholder.com/300").to_string();
 
             let progress_ms = json["progress_ms"].as_u64().unwrap_or(0) as u32;
             let duration_ms = json["item"]["duration_ms"].as_u64().unwrap_or(0) as u32;
 
-            Ok(Song {
-                title,
-                artist,
-                image,
-                progress_ms,
-                duration_ms,
-            })
+            // Extract the artist ID
+            let artist_id = json["item"]["artists"][0]["id"]
+                .as_str()
+                .ok_or("No artist ID found.")?;
+
+            // Fetch artist details
+            let artist_resp = client
+                .get(format!("https://api.spotify.com/v1/artists/{}", artist_id))
+                .bearer_auth(&access_token)
+                .send()
+                .await
+                .map_err(|e| format!("Failed to fetch artist info: {:?}", e))?;
+
+            if artist_resp.status().is_success() {
+                let artist_data: serde_json::Value = artist_resp.json().await.map_err(|e| format!("Failed to parse artist JSON: {:?}", e))?;
+                let artist_image = artist_data["images"][0]["url"].as_str().unwrap_or("https://via.placeholder.com/300").to_string();
+
+                Ok(Song {
+                    title,
+                    artist,
+                    image: album_image,
+                    artist_image,
+                    progress_ms,
+                    duration_ms,
+                })
+            } else {
+                let error_text = artist_resp.text().await.unwrap_or("Unknown error".to_string());
+                Err(format!("Spotify API returned an error fetching artist: {}", error_text))
+            }
         }
         _ => {
             let error_text = resp.text().await.unwrap_or("Unknown Spotify error".to_string());
@@ -83,8 +106,6 @@ async fn fetch_current_song(state: tauri::State<'_, AppState>) -> Result<Song, S
         }
     }
 }
-
-
 
 #[command]
 async fn exchange_spotify_token(code: String) -> Result<TokenResponse, String> {

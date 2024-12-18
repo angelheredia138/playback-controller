@@ -3,19 +3,19 @@
   <div
     class="relative min-h-screen w-full flex flex-col"
     :style="{
-      backgroundImage: `linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url(${song.image})`,
+      backgroundImage: `linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url(${song.artist_image})`,
       backgroundSize: 'cover',
       backgroundPosition: 'center',
       backgroundRepeat: 'no-repeat',
     }"
   >
     <!-- Top-right container for playlist info -->
-    <div class="absolute top-4 right-4 text-left">
-      <p class="text-sm text-gray-300 font-semibold">PLAYING FROM PLAYLIST:</p>
+    <div class="absolute top-8 left-8 text-left">
+      <p class="text-lg text-gray-300 font-semibold">PLAYING FROM PLAYLIST:</p>
       <div class="mt-2">
         <select
           v-model="selectedPlaylist"
-          class="bg-gray-800 text-white p-2 rounded text-sm font-semibold"
+          class="bg-gray-800 text-white p-2 rounded text-lg font-semibold"
           @change="changePlaylist"
         >
           <option value="" disabled>Select a playlist</option>
@@ -225,6 +225,7 @@ async function getCurrentSong() {
         title: currentSong.title,
         artist: currentSong.artist,
         image: currentSong.image,
+        artist_image: currentSong.artist_image, // New field
       };
       progressMs.value = currentSong.progress_ms;
       durationMs.value = currentSong.duration_ms;
