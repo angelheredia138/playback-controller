@@ -23,7 +23,10 @@ struct Song {
     title: String,
     artist: String,
     image: String,
+    progress_ms: u32,
+    duration_ms: u32,
 }
+
 
 // State for storing the access token globally
 struct AppState {
@@ -59,36 +62,19 @@ async fn fetch_current_song(state: tauri::State<'_, AppState>) -> Result<Song, S
         code if code.is_success() => {
             let json: serde_json::Value = resp.json().await.map_err(|e| format!("Could not parse Spotify response: {:?}", e))?;
 
-            let title = json
-                .get("item")
-                .and_then(|item| item.get("name"))
-                .and_then(|name| name.as_str())
-                .unwrap_or("Unknown Title")
-                .to_string();
+            let title = json["item"]["name"].as_str().unwrap_or("Unknown Title").to_string();
+            let artist = json["item"]["artists"][0]["name"].as_str().unwrap_or("Unknown Artist").to_string();
+            let image = json["item"]["album"]["images"][0]["url"].as_str().unwrap_or("https://via.placeholder.com/300").to_string();
 
-            let artist = json
-                .get("item")
-                .and_then(|item| item.get("artists"))
-                .and_then(|artists| artists.get(0))
-                .and_then(|artist| artist.get("name"))
-                .and_then(|name| name.as_str())
-                .unwrap_or("Unknown Artist")
-                .to_string();
-
-            let image = json
-                .get("item")
-                .and_then(|item| item.get("album"))
-                .and_then(|album| album.get("images"))
-                .and_then(|images| images.get(0))
-                .and_then(|img| img.get("url"))
-                .and_then(|url| url.as_str())
-                .unwrap_or("https://via.placeholder.com/300")
-                .to_string();
+            let progress_ms = json["progress_ms"].as_u64().unwrap_or(0) as u32;
+            let duration_ms = json["item"]["duration_ms"].as_u64().unwrap_or(0) as u32;
 
             Ok(Song {
                 title,
                 artist,
                 image,
+                progress_ms,
+                duration_ms,
             })
         }
         _ => {
@@ -97,6 +83,8 @@ async fn fetch_current_song(state: tauri::State<'_, AppState>) -> Result<Song, S
         }
     }
 }
+
+
 
 #[command]
 async fn exchange_spotify_token(code: String) -> Result<TokenResponse, String> {
@@ -559,7 +547,7 @@ fn main() {
             get_devices,
             get_playback_state,
             fetch_playlists,
-            get_current_playback
+            get_current_playback,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");
