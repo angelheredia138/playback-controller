@@ -540,6 +540,52 @@ async fn toggle_fullscreen(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
+// Fetch the user's Spotify profile (for profile image)
+#[tauri::command]
+async fn get_user_profile(access: String) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://api.spotify.com/v1/me")
+        .bearer_auth(&access)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch user profile: {:?}", e))?;
+
+    if resp.status().is_success() {
+        let user: serde_json::Value = resp.json().await.map_err(|e| format!("Failed to parse user profile: {:?}", e))?;
+        Ok(user)
+    } else {
+        let error_text = resp.text().await.unwrap_or("Unknown error".to_string());
+        Err(format!("Spotify API error: {}", error_text))
+    }
+}
+
+// Fetch the image URL for a given playlist
+#[tauri::command]
+async fn get_playlist_image(access: String, playlist_id: String) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let url = format!("https://api.spotify.com/v1/playlists/{}", playlist_id);
+    let resp = client
+        .get(&url)
+        .bearer_auth(&access)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch playlist: {:?}", e))?;
+
+    if resp.status().is_success() {
+        let playlist: serde_json::Value = resp.json().await.map_err(|e| format!("Failed to parse playlist: {:?}", e))?;
+        let image_url = playlist["images"]
+            .get(0)
+            .and_then(|img| img["url"].as_str())
+            .unwrap_or("https://placehold.co/600x600/222/fff?text=No+Image")
+            .to_string();
+        Ok(image_url)
+    } else {
+        let error_text = resp.text().await.unwrap_or("Unknown error".to_string());
+        Err(format!("Spotify API error: {}", error_text))
+    }
+}
+
 async fn callback_service(
     req: Request<Body>,
     app_state: Arc<AppState>,
@@ -641,6 +687,8 @@ fn main() {
             fetch_playlists,
             get_current_playback,
             toggle_fullscreen,
+            get_user_profile,
+            get_playlist_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");
