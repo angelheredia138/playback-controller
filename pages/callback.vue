@@ -1,48 +1,57 @@
 <template>
   <div class="flex items-center justify-center h-screen bg-gray-900 text-white">
-    <div>
+    <div class="text-center">
       <h1 class="text-2xl mb-4">Logging in...</h1>
-      <p v-if="errorMessage" class="text-red-500">{{ errorMessage }}</p>
+      <p v-if="errorMessage" class="text-red-500 mb-4">{{ errorMessage }}</p>
+      <p v-else-if="successMessage" class="text-green-500 mb-4">{{ successMessage }}</p>
+      <p v-else>Waiting for authorization code...</p>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from "vue";
-import { useRouter, useRoute } from "vue-router";
-import { invoke } from "@tauri-apps/api/core"; // Correct Tauri import
+import { invoke } from "@tauri-apps/api/core";
 
-const router = useRouter();
-const route = useRoute();
 const errorMessage = ref("");
+const successMessage = ref("");
 
-const handleCallback = async () => {
+const handleTokens = async () => {
   try {
-    const code = route.query.code; // Get 'code' from URL
-    if (!code) {
-      throw new Error("Authorization code is missing.");
+    // Extract the code from the URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get("code");
+
+    if (code) {
+      console.log("Authorization Code:", code);
+
+      // Exchange the code for tokens
+      const response = await invoke("exchange_spotify_token", { code });
+      console.log("Token Response:", response);
+
+      // Save tokens in localStorage
+      localStorage.setItem("spotify_access_token", response.access_token);
+      if (response.refresh_token) {
+        localStorage.setItem("spotify_refresh_token", response.refresh_token);
+      }
+
+      // Display success message
+      successMessage.value = "Tokens saved successfully! Redirecting...";
+      
+      // Redirect to playback page
+      setTimeout(() => {
+        window.location.href = "/playback";
+      }, 1000);
+    } else {
+      throw new Error("Authorization code not found in URL.");
     }
-
-    console.log("Authorization Code:", code);
-
-    // Exchange the code for an access token
-    const response = await invoke("exchange_spotify_token", { code });
-
-    console.log("Token Response:", response);
-
-    // Save tokens in localStorage
-    localStorage.setItem("spotify_access_token", response.access_token);
-    localStorage.setItem("spotify_refresh_token", response.refresh_token);
-
-    // Redirect to the playback page
-    router.push("/playback");
   } catch (error) {
-    console.error("Error handling Spotify callback:", error);
+    console.error("Error handling tokens:", error);
     errorMessage.value = error.message || "An unexpected error occurred.";
   }
 };
 
 onMounted(() => {
-  handleCallback();
+  handleTokens();
 });
 </script>

@@ -29,4 +29,10 @@ export default defineNuxtConfig({
       autoprefixer: {},
     },
   },
+
+  target: 'static',
+  ssr:false,
+  generate: {
+    dir:'dist',
+},
 });

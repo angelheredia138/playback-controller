@@ -95,6 +95,7 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "dotenv",
+ "hyper 0.14.32",
  "log",
  "reqwest 0.11.27",
  "serde",
@@ -102,6 +103,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-log",
+ "url",
 ]
 
 [[package]]
