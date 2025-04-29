@@ -560,11 +560,12 @@ async fn get_user_profile(access: String) -> Result<serde_json::Value, String> {
     }
 }
 
-// Fetch the image URL for a given playlist
+// Update the function to use playlistId (camelCase) parameter instead of snake_case
 #[tauri::command]
-async fn get_playlist_image(access: String, playlist_id: String) -> Result<String, String> {
+async fn get_playlist_image(access: String, playlistId: String) -> Result<String, String> {
     let client = reqwest::Client::new();
-    let url = format!("https://api.spotify.com/v1/playlists/{}", playlist_id);
+    let url = format!("https://api.spotify.com/v1/playlists/{}", playlistId);
+    
     let resp = client
         .get(&url)
         .bearer_auth(&access)
@@ -574,11 +575,13 @@ async fn get_playlist_image(access: String, playlist_id: String) -> Result<Strin
 
     if resp.status().is_success() {
         let playlist: serde_json::Value = resp.json().await.map_err(|e| format!("Failed to parse playlist: {:?}", e))?;
+
         let image_url = playlist["images"]
             .get(0)
             .and_then(|img| img["url"].as_str())
             .unwrap_or("https://placehold.co/600x600/222/fff?text=No+Image")
             .to_string();
+
         Ok(image_url)
     } else {
         let error_text = resp.text().await.unwrap_or("Unknown error".to_string());

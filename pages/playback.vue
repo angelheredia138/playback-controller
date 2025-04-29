@@ -202,7 +202,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, computed, watch } from "vue";
+import { ref, onMounted, onUnmounted, computed } from "vue";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useRouter } from "vue-router";
@@ -219,8 +219,14 @@ import {
 
 const router = useRouter();
 
+const loggedOut = ref(false);
+
 async function logout() {
   try {
+    loggedOut.value = true;
+    stopLocalTimer();
+    if (tokenRefreshInterval) clearInterval(tokenRefreshInterval);
+    if (songTimeout) clearTimeout(songTimeout);
     // Clear tokens from localStorage
     localStorage.removeItem("spotify_access_token");
     localStorage.removeItem("spotify_refresh_token");
@@ -242,6 +248,7 @@ const selectedPlaylist = ref(null); // <-- Move this above the watcher
 
 // Fetch user profile image
 async function fetchUserProfileImage() {
+  if (loggedOut.value) return;
   try {
     const access = await getAccessToken();
     const user = await tauriInvoke("get_user_profile", { access });
@@ -254,28 +261,127 @@ async function fetchUserProfileImage() {
   }
 }
 
-// Fetch playlist image
-async function fetchPlaylistImage(playlistId) {
+// We'll keep this watch to update the image when the dropdown selection changes
+async function updateUIState(playlistId = null) {
+  if (loggedOut.value) return;
   try {
-    if (!playlistId) {
-      playlistImage.value = PLACEHOLDER_IMAGE;
-      return;
-    }
     const access = await getAccessToken();
-    const imageUrl = await tauriInvoke("get_playlist_image", {
-      access,
-      playlist_id: playlistId,
-    });
-    playlistImage.value = imageUrl || PLACEHOLDER_IMAGE;
+
+    // Fetch all state in parallel
+    const [playbackState, currentSong, playlists] = await Promise.all([
+      invokeWithRetry("get_playback_state", { access }),
+      invokeWithRetry("fetch_current_song", { access }),
+      invokeWithRetry("fetch_playlists", { access }),
+    ]);
+
+    // Prepare all state changes
+    const updates = {};
+
+    // Playlist state
+    if (playlists?.items) {
+      updates.playlists = playlists.items.map((p) => ({
+        id: p.id,
+        name: p.name,
+      }));
+    }
+
+    // Playback context
+    const contextUri = playbackState?.context?.uri;
+    const effectivePlaylistId =
+      playlistId ||
+      (contextUri?.startsWith("spotify:playlist:")
+        ? contextUri.split(":")[2]
+        : null);
+
+    // Check if playlist changed
+    const playlistChanged =
+      effectivePlaylistId && selectedPlaylist.value !== effectivePlaylistId;
+
+    if (effectivePlaylistId) {
+      updates.selectedPlaylist = effectivePlaylistId;
+      const playlistImg = await tauriInvoke("get_playlist_image", {
+        access,
+        playlistId: effectivePlaylistId,
+      });
+      updates.playlistImage = playlistImg || PLACEHOLDER_IMAGE;
+    }
+
+    // Song and background state
+    if (currentSong) {
+      const albumImg =
+        currentSong.album_image || currentSong.image || PLACEHOLDER_IMAGE;
+
+      // Check if song changed
+      const oldSongId = song.value?.title + ":" + song.value?.artist;
+      const newSongId =
+        (currentSong.title || "Unknown") +
+        ":" +
+        (currentSong.artist || "Unknown");
+      const songChanged = oldSongId !== newSongId;
+
+      // If song or playlist changed, trigger animation
+      if (songChanged || playlistChanged) {
+        animateBgSwipe(
+          swipeDirection.value !== "none" ? swipeDirection.value : "left"
+        );
+      }
+
+      updates.song = {
+        title: currentSong.title || "Unknown Title",
+        artist: currentSong.artist || "Unknown Artist",
+        image: currentSong.image || PLACEHOLDER_IMAGE,
+        album_image: albumImg,
+        artist_image: currentSong.artist_image || PLACEHOLDER_IMAGE,
+      };
+      updates.progressMs = currentSong.progress_ms || 0;
+      updates.durationMs = currentSong.duration_ms || 0;
+
+      // Only update background images if song changed (prevents animation glitches)
+      if (songChanged || playlistChanged) {
+        oldBackgroundImage.value = newBackgroundImage.value;
+        newBackgroundImage.value = albumImg;
+      }
+    }
+
+    // Playback controls state
+    updates.isPlaying = playbackState?.is_playing || false;
+    updates.isShuffleEnabled = playbackState?.shuffle_state || false;
+    updates.volume =
+      playbackState?.device?.volume_percent ?? currentVolume.value;
+
+    // Apply all updates atomically
+    availablePlaylists.value = updates.playlists || [];
+
+    // Only update volume if it's significantly different (prevents slider jumping)
+    if (Math.abs(updates.volume - currentVolume.value) > 2) {
+      currentVolume.value = updates.volume;
+    }
+
+    selectedPlaylist.value = updates.selectedPlaylist;
+    playlistImage.value = updates.playlistImage || PLACEHOLDER_IMAGE;
+    if (updates.song) song.value = updates.song;
+    progressMs.value = updates.progressMs;
+    durationMs.value = updates.durationMs;
+    isPlaying.value = updates.isPlaying;
+    isShuffleEnabled.value = updates.isShuffleEnabled;
+
+    // Handle timer state
+    stopLocalTimer();
+    if (updates.isPlaying && updates.durationMs > 0) {
+      startLocalTimer();
+    }
+
+    // Schedule next update
+    if (songTimeout) clearTimeout(songTimeout);
+    const remainingTime = Math.max(updates.durationMs - updates.progressMs, 0);
+    songTimeout = setTimeout(
+      () => updateUIState(selectedPlaylist.value),
+      remainingTime
+    );
   } catch (err) {
-    playlistImage.value = PLACEHOLDER_IMAGE;
+    console.error("Error updating UI state:", err);
   }
 }
-
-// Watch for playlist change to update playlist image
-watch(selectedPlaylist, (newId) => {
-  fetchPlaylistImage(newId);
-});
 
 const song = ref({
   title: "Unknown Title",
@@ -309,6 +415,7 @@ let localTimer = null;
 let syncInterval = null; // Add this for the 3s sync interval
 
 async function getAccessToken() {
+  if (loggedOut.value) throw new Error("Logged out.");
   const currentTime = Date.now();
 
   // Check if the token is expired or about to expire (buffer time of 1 minute)
@@ -380,27 +487,90 @@ async function invokeWithRetry(cmd, args = {}, maxRetries = 2) {
   throw new Error("Max retries reached for Spotify API call.");
 }
 
-async function changePlaylist() {
+// Fix fetchPlaylistImage to properly update image when playlistId changes
+async function fetchPlaylistImage(playlistId) {
+  if (loggedOut.value) return;
   try {
-    if (process.client) {
-      const access = await getAccessToken();
-      if (selectedPlaylist.value) {
-        await invokeWithRetry("change_playlist", {
-          access: access,
-          id: selectedPlaylist.value,
-        });
-        setTimeout(async () => {
-          await getCurrentSong();
-          await fetchPlaybackState();
-        }, 100); // Reduced delay
-      }
+    if (!playlistId) {
+      playlistImage.value = PLACEHOLDER_IMAGE;
+      return;
     }
+
+    const access = await getAccessToken();
+
+    // Use playlistId to match the backend parameter name
+    const imageUrl = await tauriInvoke("get_playlist_image", {
+      access,
+      playlistId,
+    });
+
+    playlistImage.value = imageUrl || PLACEHOLDER_IMAGE;
   } catch (err) {
-    console.error("Error changing playlist:", err);
+    console.error("Error fetching playlist image:", err);
+    playlistImage.value = PLACEHOLDER_IMAGE;
   }
 }
 
+async function changePlaylist() {
+  if (loggedOut.value || !selectedPlaylist.value) return;
+  try {
+    if (process.client) {
+      console.log("Changing playlist to:", selectedPlaylist.value);
+
+      const access = await getAccessToken();
+
+      // Set immediate visual feedback
+      const oldPlaylistId = selectedPlaylist.value;
+      swipeDirection.value = "left";
+
+      // Show loading state
+      song.value = {
+        title: "Loading playlist...",
+        artist: "",
+        image: PLACEHOLDER_IMAGE,
+        album_image: PLACEHOLDER_IMAGE,
+        artist_image: PLACEHOLDER_IMAGE,
+      };
+
+      // Change playlist
+      await invokeWithRetry("change_playlist", {
+        access,
+        id: selectedPlaylist.value,
+      });
+
+      // Force immediate playback state update
+      const playbackState = await invokeWithRetry("get_playback_state", {
+        access,
+      });
+      isPlaying.value = playbackState?.is_playing || false;
+
+      // Update playlist image
+      await fetchPlaylistImage(selectedPlaylist.value);
+
+      // Wait for Spotify to process the change, then update everything
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Full UI state update
+      await updateUIState(oldPlaylistId);
+
+      // Double-check state after a longer delay to ensure everything is in sync
+      setTimeout(() => updateUIState(oldPlaylistId), 1500);
+    }
+  } catch (err) {
+    console.error("Error changing playlist:", err);
+    // Revert UI on error
+    updateUIState();
+  }
+}
+
+// Add reliable v-model update to the select element
+async function handlePlaylistSelect(event) {
+  selectedPlaylist.value = event.target.value;
+  await changePlaylist();
+}
+
 async function goFullscreen() {
+  if (loggedOut.value) return;
   try {
     if (process.client) {
       await tauriInvoke("toggle_fullscreen");
@@ -413,23 +583,25 @@ async function goFullscreen() {
 }
 
 async function togglePlayPause() {
+  if (loggedOut.value) return;
   try {
     if (process.client) {
       const access = await getAccessToken();
 
       if (isPlaying.value) {
         await invokeWithRetry("pause", { access });
+        // Update local state immediately for responsive UI
         isPlaying.value = false;
-        stopLocalTimer(); // Explicitly stop timer
+        stopLocalTimer();
       } else {
         await invokeWithRetry("play", { access });
+        // Update local state immediately for responsive UI
         isPlaying.value = true;
-        startLocalTimer(); // Start timer only when playing
+        startLocalTimer();
       }
 
-      // Always fetch current song and playback state after play/pause
-      await getCurrentSong();
-      await fetchPlaybackState();
+      // Sync all UI state after a brief delay to allow Spotify to update
+      setTimeout(() => updateUIState(), 100);
     } else {
       console.warn("Not running in client mode. Skipping togglePlayPause.");
     }
@@ -439,45 +611,42 @@ async function togglePlayPause() {
 }
 
 async function nextTrack() {
-  swipeDirection.value = "left";
-  await _nextTrack();
-}
-
-async function previousTrack() {
-  swipeDirection.value = "right";
-  await _previousTrack();
-}
-
-// Save original handlers
-const _nextTrack = async function () {
+  if (loggedOut.value) return;
   try {
     if (process.client) {
+      // Set animation direction first
+      swipeDirection.value = "left";
+
+      // Execute the command
       const access = await getAccessToken();
       await invokeWithRetry("skip_next", { access });
-      setTimeout(async () => {
-        await getCurrentSong();
-        await fetchPlaybackState();
-      }, 100);
+
+      // Sync all UI state after a brief delay to allow Spotify to update
+      setTimeout(() => updateUIState(), 100);
     }
   } catch (err) {
     console.error("Error skipping to the next track:", err);
   }
-};
+}
 
-const _previousTrack = async function () {
+async function previousTrack() {
+  if (loggedOut.value) return;
   try {
     if (process.client) {
+      // Set animation direction first
+      swipeDirection.value = "right";
+
+      // Execute the command
       const access = await getAccessToken();
       await invokeWithRetry("skip_previous", { access });
-      setTimeout(async () => {
-        await getCurrentSong();
-        await fetchPlaybackState();
-      }, 100);
+
+      // Sync all UI state after a brief delay to allow Spotify to update
+      setTimeout(() => updateUIState(), 100);
     }
   } catch (err) {
     console.error("Error skipping to the previous track:", err);
   }
-};
+}
 
 // --- Animation State ---
 const oldBackgroundImage = ref(PLACEHOLDER_IMAGE);
@@ -524,69 +693,29 @@ function afterBgTransition() {
   swipeDirection.value = "none";
 }
 
-// --- Watch for song change and trigger animation ---
-let lastSongId = ref(null);
-watch(
-  () => song.value,
-  (newSong, oldSong) => {
-    if (!oldSong || !newSong) return;
-    // Detect song change by comparing title+artist (or use a unique id if available)
-    const oldId = oldSong.title + oldSong.artist;
-    const newId = newSong.title + newSong.artist;
-    if (oldId !== newId) {
-      // Default to left swipe (auto-next or skip)
-      animateBgSwipe("left");
-      lastSongId.value = newId;
-    }
-  }
-);
-
-// --- Hook skip/prev to set direction ---
-
-async function toggleShuffle() {
-  try {
-    if (process.client) {
-      const access = await getAccessToken();
-      const newShuffleState = await invokeWithRetry("toggle_shuffle", {
-        access,
-      });
-      isShuffleEnabled.value = newShuffleState;
-    } else {
-      console.warn("Not running in client mode. Skipping toggleShuffle.");
-    }
-  } catch (err) {
-    console.error("Error toggling shuffle:", err);
-  }
-}
-
-async function restartSong() {
-  try {
-    if (process.client) {
-      const access = await getAccessToken();
-      await invokeWithRetry("restart_song", { access });
-      // Always fetch current song and playback state after restart
-      await getCurrentSong();
-      await fetchPlaybackState();
-    } else {
-      console.warn("Not running in client mode. Skipping restartSong.");
-    }
-  } catch (err) {
-    console.error("Error restarting the song:", err);
-  }
-}
-
 // Debounce logic for volume changes
 let volumeDebounceTimeout = null;
 let lastVolumeValue = currentVolume.value;
 
 function debouncedUpdateVolume() {
+  if (loggedOut.value) return;
+
+  // Update the slider's appearance immediately for better UX
+  const slider = document.querySelector(".volume-slider");
+  if (slider) {
+    slider.style.background = `linear-gradient(to right, #1DB954 0%, #1DB954 ${currentVolume}%, #9CA3AF ${currentVolume}%, #9CA3AF 100%)`;
+  }
+
+  // Debounce the actual API call
   if (volumeDebounceTimeout) clearTimeout(volumeDebounceTimeout);
   volumeDebounceTimeout = setTimeout(() => {
     updateVolume();
   }, 300); // 300ms debounce
 }
 
+// Also update the volume control for consistency
 async function updateVolume() {
+  if (loggedOut.value) return;
   try {
     if (process.client) {
       const access = await getAccessToken();
@@ -594,25 +723,38 @@ async function updateVolume() {
         access: access,
         volume: currentVolume.value,
       });
+
+      // Store last successfully set value
+      lastVolumeValue = currentVolume.value;
     } else {
       console.warn("Not running in client mode. Skipping updateVolume.");
     }
   } catch (err) {
     console.error("Error setting volume:", err);
+    // Rollback to last known working value on error
+    currentVolume.value = lastVolumeValue;
   }
 }
 
 async function toggleMute() {
+  if (loggedOut.value) return;
   try {
     if (process.client) {
       if (currentVolume.value === 0) {
         // Unmute: Restore previous volume
-        currentVolume.value = previousVolume.value;
+        currentVolume.value = previousVolume.value || 50;
       } else {
         // Mute: Store current volume and set to 0
         previousVolume.value = currentVolume.value;
         currentVolume.value = 0;
       }
+
+      // Update slider appearance immediately
+      const slider = document.querySelector(".volume-slider");
+      if (slider) {
+        slider.style.background = `linear-gradient(to right, #1DB954 0%, #1DB954 ${currentVolume}%, #9CA3AF ${currentVolume}%, #9CA3AF 100%)`;
+      }
+
       // Update Spotify volume
       await updateVolume();
     }
@@ -622,6 +764,7 @@ async function toggleMute() {
 }
 
 async function syncWithSpotify() {
+  if (loggedOut.value) return;
   if (!isPlaying.value) return;
   const access = await getAccessToken();
   const currentSong = await invokeWithRetry("fetch_current_song", { access });
@@ -631,6 +774,7 @@ async function syncWithSpotify() {
 }
 
 async function getCurrentSong() {
+  if (loggedOut.value) return;
   try {
     if (process.client) {
       const access = await getAccessToken();
@@ -684,6 +828,7 @@ function stopLocalTimer() {
 }
 
 function startLocalTimer() {
+  if (loggedOut.value) return;
   stopLocalTimer();
 
   if (isPlaying.value) {
@@ -707,7 +852,7 @@ function startLocalTimer() {
       if (isPlaying.value) {
         await syncWithSpotify();
       }
-    }, 3000);
+    }, 10000); // Changed from 3000ms (3s) to 10000ms (10s)
   }
 }
 
@@ -720,6 +865,7 @@ function formatTime(ms) {
 
 // Add fetchPlaybackState here, before onMounted
 async function fetchPlaybackState() {
+  if (loggedOut.value) return;
   try {
     if (process.client) {
       const access = await getAccessToken();
@@ -737,6 +883,7 @@ async function fetchPlaybackState() {
       const playbackState = await invokeWithRetry("get_playback_state", {
         access,
       });
+      console.log("Playback context URI:", playbackState?.context?.uri);
       const contextUri = playbackState?.context?.uri || null;
       if (contextUri && contextUri.startsWith("spotify:playlist:")) {
         const playlistId = contextUri.split(":")[2];
@@ -749,6 +896,13 @@ async function fetchPlaybackState() {
             name: "Unknown Playlist",
           });
         }
+        // Only fetch the image on initial load (first time)
+        if (!playlistImage.value || playlistImage.value === PLACEHOLDER_IMAGE) {
+          fetchPlaylistImage(playlistId);
+        }
+      } else {
+        // If not a playlist, set placeholder image
+        fetchPlaylistImage(null);
       }
       const volume = playbackState?.device?.volume_percent;
       if (typeof volume === "number") {
@@ -765,6 +919,7 @@ async function fetchPlaybackState() {
 }
 
 onMounted(() => {
+  if (loggedOut.value) return;
   console.log("Initializing backend-log listener...");
 
   listen("backend-log", (event) => {
@@ -773,27 +928,19 @@ onMounted(() => {
     console.error("Failed to listen for backend-log events:", err)
   );
 
-  // First fetch playback state to get isPlaying status
-  fetchPlaybackState().then(() => {
-    // Then get current song which will start timer if needed
-    getCurrentSong();
-  });
+  // Initial state load with delay to ensure Spotify is ready
+  setTimeout(() => {
+    updateUIState();
+  }, 100);
 
-  tokenRefreshInterval = setInterval(async () => {
-    try {
-      console.log("Attempting periodic token refresh...");
-      await refreshAccessToken();
-    } catch (err) {
-      console.error("Error during periodic token refresh:", err);
-    }
-  }, 3000000); // 50 minutes in milliseconds
-
+  // User profile and token refresh setup
   fetchUserProfileImage();
+  tokenRefreshInterval = setInterval(refreshAccessToken, 3000000);
 });
 
 onUnmounted(() => {
-  if (localTimer) clearInterval(localTimer);
-  if (tokenRefreshInterval) clearInterval(tokenRefreshInterval); // Now this works
+  stopLocalTimer();
+  if (tokenRefreshInterval) clearInterval(tokenRefreshInterval);
   if (songTimeout) clearTimeout(songTimeout);
 });
 </script>
