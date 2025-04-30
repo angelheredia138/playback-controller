@@ -852,7 +852,7 @@ function startLocalTimer() {
       if (isPlaying.value) {
         await syncWithSpotify();
       }
-    }, 10000); // Changed from 3000ms (3s) to 10000ms (10s)
+    }, 3000); // Changed from 3000ms (3s) to 10000ms (10s)
   }
 }
 
