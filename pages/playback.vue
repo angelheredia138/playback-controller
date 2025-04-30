@@ -80,7 +80,7 @@
           <img
             :src="playlistImage"
             alt="Playlist"
-            class="w-12 h-12 rounded shadow border border-gray-700 mt-2"
+            class="w-20 h-20 rounded shadow border border-gray-700 mt-2"
           />
         </div>
       </div>
@@ -511,6 +511,44 @@ async function fetchPlaylistImage(playlistId) {
   }
 }
 
+async function fastStateSync() {
+  if (loggedOut.value) return;
+  try {
+    const access = await getAccessToken();
+
+    // Fetch minimal state in parallel
+    const [playbackState, currentSong] = await Promise.all([
+      invokeWithRetry("get_playback_state", { access }),
+      invokeWithRetry("fetch_current_song", { access }),
+    ]);
+
+    if (currentSong) {
+      const albumImg =
+        currentSong.album_image || currentSong.image || PLACEHOLDER_IMAGE;
+
+      song.value = {
+        title: currentSong.title || "Unknown Title",
+        artist: currentSong.artist || "Unknown Artist",
+        image: currentSong.image || PLACEHOLDER_IMAGE,
+        album_image: albumImg,
+        artist_image: currentSong.artist_image || PLACEHOLDER_IMAGE,
+      };
+
+      progressMs.value = currentSong.progress_ms || 0;
+      durationMs.value = currentSong.duration_ms || 0;
+
+      // Update background
+      oldBackgroundImage.value = newBackgroundImage.value;
+      newBackgroundImage.value = albumImg;
+    }
+
+    isPlaying.value = playbackState?.is_playing || false;
+    isShuffleEnabled.value = playbackState?.shuffle_state || false;
+  } catch (err) {
+    console.error("Error in fast state sync:", err);
+  }
+}
+
 async function changePlaylist() {
   if (loggedOut.value || !selectedPlaylist.value) return;
   try {
@@ -518,47 +556,43 @@ async function changePlaylist() {
       console.log("Changing playlist to:", selectedPlaylist.value);
 
       const access = await getAccessToken();
-
-      // Set immediate visual feedback
       const oldPlaylistId = selectedPlaylist.value;
       swipeDirection.value = "left";
 
-      // Show loading state
-      song.value = {
-        title: "Loading playlist...",
-        artist: "",
-        image: PLACEHOLDER_IMAGE,
-        album_image: PLACEHOLDER_IMAGE,
-        artist_image: PLACEHOLDER_IMAGE,
-      };
+      // Pre-fetch the playlist image to have it ready
+      fetchPlaylistImage(selectedPlaylist.value);
 
-      // Change playlist
-      await invokeWithRetry("change_playlist", {
+      // Change playlist without waiting
+      invokeWithRetry("change_playlist", {
         access,
         id: selectedPlaylist.value,
       });
 
-      // Force immediate playback state update
-      const playbackState = await invokeWithRetry("get_playback_state", {
-        access,
-      });
-      isPlaying.value = playbackState?.is_playing || false;
+      // Immediate checks for state changes
+      const checkState = async () => {
+        const playbackState = await invokeWithRetry("get_playback_state", {
+          access,
+        });
+        if (playbackState?.context?.uri?.includes(selectedPlaylist.value)) {
+          await fastStateSync();
+          return true;
+        }
+        return false;
+      };
 
-      // Update playlist image
-      await fetchPlaylistImage(selectedPlaylist.value);
+      // Quick successive checks for faster UI updates
+      const timeouts = [100, 300, 600, 1000];
+      for (const timeout of timeouts) {
+        await new Promise((resolve) => setTimeout(resolve, timeout));
+        const success = await checkState();
+        if (success) break;
+      }
 
-      // Wait for Spotify to process the change, then update everything
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      // Full UI state update
-      await updateUIState(oldPlaylistId);
-
-      // Double-check state after a longer delay to ensure everything is in sync
-      setTimeout(() => updateUIState(oldPlaylistId), 1500);
+      // Final full state update
+      updateUIState(oldPlaylistId);
     }
   } catch (err) {
     console.error("Error changing playlist:", err);
-    // Revert UI on error
     updateUIState();
   }
 }
